@@ -4,17 +4,6 @@ import org.maplibre.android.geometry.LatLng
 import kotlin.math.atan2
 import kotlin.math.cos
 
-/**
- * Automatic rider assignment in two steps:
- *
- *  1. SWEEP: sort customers by direction from the hub and cut the circle into
- *     equal slices, one per rider (a quick, balanced first guess).
- *  2. IMPROVE: try moving or swapping customers between riders. A change is kept
- *     only if it makes the riders' combined round-trip distance shorter.
- *     This fixes cases where far-apart places ended up with the same rider.
- *
- * Workloads stay balanced: the number of stops per rider never differs by more than 1.
- */
 object RiderAssigner {
 
     private fun bearing(from: LatLng, to: LatLng): Double {
@@ -29,6 +18,13 @@ object RiderAssigner {
     fun assign(hub: LatLng, orders: List<DeliveryOrder>, riderCount: Int): List<List<DeliveryOrder>> {
         val k = riderCount.coerceAtLeast(1)
         if (orders.isEmpty()) return List(k) { emptyList() }
+        if (orders.size <= k) {
+            val result = MutableList(k) { emptyList<DeliveryOrder>() }
+            orders.forEachIndexed { idx, order ->
+                result[idx] = listOf(order)
+            }
+            return result
+        }
 
         val groups = sweep(hub, orders, k).map { it.toMutableList() }.toMutableList()
         improve(hub, groups)
@@ -36,6 +32,7 @@ object RiderAssigner {
     }
 
     private fun sweep(hub: LatLng, orders: List<DeliveryOrder>, k: Int): List<List<DeliveryOrder>> {
+        if (orders.isEmpty()) return List(k) { emptyList() }
         val sorted = orders.sortedBy { bearing(hub, point(it)) }
         val angles = sorted.map { bearing(hub, point(it)) }
 
@@ -57,8 +54,9 @@ object RiderAssigner {
         var cursor = 0
         return List(k) { rider ->
             val count = base + if (rider < extra) 1 else 0
-            val slice = rotated.subList(cursor, cursor + count).toList()
-            cursor += count
+            val endIdx = (cursor + count).coerceAtMost(rotated.size)
+            val slice = if (cursor < rotated.size) rotated.subList(cursor, endIdx).toList() else emptyList()
+            cursor = endIdx
             slice
         }
     }
@@ -74,8 +72,10 @@ object RiderAssigner {
         var total = 0.0
         var previous = 0
         for (idx in order) {
-            total += d[previous][idx]
-            previous = idx
+            if (idx in 0 until n) {
+                total += d[previous][idx]
+                previous = idx
+            }
         }
         return total + d[previous][0]
     }

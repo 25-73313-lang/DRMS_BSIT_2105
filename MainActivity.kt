@@ -1,5 +1,6 @@
 package com.example.deliveryroutesystem
 
+import android.app.Activity
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.Canvas
@@ -7,12 +8,15 @@ import android.graphics.Color as AndroidColor
 import android.graphics.Paint
 import android.graphics.Typeface
 import android.os.Bundle
+import android.view.WindowManager
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.viewModels
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -38,6 +42,11 @@ import com.example.deliveryroutesystem.ui.screens.HistorySheet
 import com.example.deliveryroutesystem.ui.screens.OrdersSheet
 import com.example.deliveryroutesystem.ui.screens.SetupSheet
 import com.example.deliveryroutesystem.ui.screens.SummarySheet
+import com.example.deliveryroutesystem.ui.theme.DeliveryRouteTheme
+import com.example.deliveryroutesystem.ui.theme.MintSecondary
+import com.example.deliveryroutesystem.ui.theme.NavyBackground
+import com.example.deliveryroutesystem.ui.theme.TealPrimary
+import com.example.deliveryroutesystem.ui.theme.UrgentRed
 import kotlinx.coroutines.delay
 import org.maplibre.android.MapLibre
 import org.maplibre.android.annotations.Icon
@@ -77,13 +86,6 @@ private const val SATELLITE_STYLE_JSON = """
 }
 """
 
-private val Navy = ComposeColor(0xFF0B2B3B)
-private val Teal = ComposeColor(0xFF0E7C7B)
-private val Mint = ComposeColor(0xFF19B38A)
-private val ScreenBg = ComposeColor(0xFFF2F5F8)
-private val Ink = ComposeColor(0xFF132733)
-private val UrgentRed = ComposeColor(0xFFD32F2F)
-
 enum class ActiveSheet {
     NONE,
     ORDERS,
@@ -101,14 +103,7 @@ class MainActivity : ComponentActivity() {
         MapLibre.getInstance(this)
 
         setContent {
-            MaterialTheme(
-                colorScheme = lightColorScheme(
-                    primary = Teal,
-                    secondary = Mint,
-                    background = ScreenBg,
-                    surface = ComposeColor.White
-                )
-            ) {
+            DeliveryRouteTheme {
                 DeliveryRouteApp(viewModel)
             }
         }
@@ -156,24 +151,46 @@ private fun applyMapStyle(context: Context, map: MapLibreMap, satellite: Boolean
     }
 }
 
-private fun makePin(context: Context, colorInt: Int, label: String, sizeDp: Int = 32): Icon {
+private fun makePin(
+    context: Context,
+    colorInt: Int,
+    label: String,
+    sizeDp: Int = 34,
+    isUrgent: Boolean = false,
+    isLate: Boolean = false
+): Icon {
     val density = context.resources.displayMetrics.density
     val size = (sizeDp * density).toInt()
     val bitmap = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
     val canvas = Canvas(bitmap)
     val paint = Paint(Paint.ANTI_ALIAS_FLAG)
 
-    paint.color = AndroidColor.WHITE
-    canvas.drawCircle(size / 2f, size / 2f, size / 2f, paint)
+    if (isLate) {
+        paint.color = AndroidColor.parseColor("#E65100")
+        canvas.drawCircle(size / 2f, size / 2f, size / 2f, paint)
+    }
+
+    val lateOffset = if (isLate) 3 * density else 0f
+    val outerRadius = size / 2f - lateOffset
+
+    if (isUrgent) {
+        paint.color = AndroidColor.parseColor("#D32F2F")
+        canvas.drawCircle(size / 2f, size / 2f, outerRadius, paint)
+    } else {
+        paint.color = AndroidColor.WHITE
+        canvas.drawCircle(size / 2f, size / 2f, outerRadius, paint)
+    }
+
     paint.color = colorInt
-    canvas.drawCircle(size / 2f, size / 2f, size / 2f - 3 * density, paint)
+    canvas.drawCircle(size / 2f, size / 2f, outerRadius - 3 * density, paint)
 
     paint.color = AndroidColor.WHITE
     paint.textAlign = Paint.Align.CENTER
     paint.typeface = Typeface.DEFAULT_BOLD
-    paint.textSize = size * 0.45f
+    paint.textSize = size * 0.40f
     val y = size / 2f - (paint.descent() + paint.ascent()) / 2f
-    canvas.drawText(label, size / 2f, y, paint)
+    val text = if (isUrgent) "⚡$label" else label
+    canvas.drawText(text, size / 2f, y, paint)
 
     return IconFactory.getInstance(context).fromBitmap(bitmap)
 }
@@ -239,7 +256,7 @@ private fun ensureRiderLayers(style: Style) {
     style.addSource(GeoJsonSource("riders-source", "{\"type\":\"FeatureCollection\",\"features\":[]}"))
     style.addLayer(CircleLayer("riders-circle", "riders-source").apply {
         setProperties(
-            PropertyFactory.circleRadius(13f),
+            PropertyFactory.circleRadius(14f),
             PropertyFactory.circleColor(Expression.toColor(Expression.get("color"))),
             PropertyFactory.circleStrokeColor(AndroidColor.WHITE),
             PropertyFactory.circleStrokeWidth(3f)
@@ -286,6 +303,18 @@ fun DeliveryRouteApp(viewModel: DeliveryViewModel) {
     val deliveredCount = todayHistory.size
     val collectedCod = todayHistory.sumOf { it.cashOnDelivery }
 
+    DisposableEffect(simRunning) {
+        val activity = context as? Activity
+        if (simRunning) {
+            activity?.window?.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        } else {
+            activity?.window?.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        }
+        onDispose {
+            activity?.window?.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        }
+    }
+
     val mapView = remember {
         MapView(context).apply {
             onCreate(null)
@@ -299,6 +328,8 @@ fun DeliveryRouteApp(viewModel: DeliveryViewModel) {
                 map.setMaxZoomPreference(18.0)
                 map.moveCamera(CameraUpdateFactory.newLatLngZoom(HUB.latLng, 12.5))
                 map.uiSettings.isRotateGesturesEnabled = false
+                map.uiSettings.setLogoMargins(30, 0, 0, 180)
+                map.uiSettings.setAttributionMargins(30, 0, 0, 180)
                 mapInstance = map
             }
         }
@@ -334,7 +365,7 @@ fun DeliveryRouteApp(viewModel: DeliveryViewModel) {
         map.addMarker(
             MarkerOptions()
                 .position(HUB.latLng)
-                .icon(makePin(context, AndroidColor.parseColor("#0B2B3B"), "H", 40))
+                .icon(makePin(context, AndroidColor.parseColor("#0B2B3B"), "H", 42))
                 .title("Hub - ${HUB.name}")
                 .snippet("All riders start & end here")
         )
@@ -345,7 +376,7 @@ fun DeliveryRouteApp(viewModel: DeliveryViewModel) {
                 map.addMarker(
                     MarkerOptions()
                         .position(LatLng(o.latitude, o.longitude))
-                        .icon(makePin(context, pinColor, "${i + 1}"))
+                        .icon(makePin(context, pinColor, "${i + 1}", sizeDp = 34, isUrgent = o.isUrgent, isLate = o.isLate))
                         .title("${if (o.isUrgent) "[URGENT] " else ""}${o.customerName}")
                         .snippet("${o.barangay} - ${o.addressDetails}")
                 )
@@ -365,7 +396,7 @@ fun DeliveryRouteApp(viewModel: DeliveryViewModel) {
                     map.addMarker(
                         MarkerOptions()
                             .position(LatLng(s.latitude, s.longitude))
-                            .icon(makePin(context, color, "${s.sequenceNumber}"))
+                            .icon(makePin(context, color, "${s.sequenceNumber}", sizeDp = 34, isUrgent = s.isUrgent, isLate = s.isLate))
                             .title("${plan.name} - Stop ${s.sequenceNumber}: ${s.customerName}${if (s.isUrgent) " [URGENT]" else ""}")
                             .snippet("ETA ${DeliveryPlanner.clockTime(plan.departureMillis, s.etaMinutes)}${if (s.isLate) " (⚠️ LATE)" else ""}")
                     )
@@ -407,7 +438,7 @@ fun DeliveryRouteApp(viewModel: DeliveryViewModel) {
         var last = System.nanoTime()
 
         while (true) {
-            delay(100)
+            delay(50)
             val now = System.nanoTime()
             val dtSim = ((now - last) / 1e9).coerceAtMost(0.5) * simSpeed
             last = now
@@ -460,7 +491,7 @@ fun DeliveryRouteApp(viewModel: DeliveryViewModel) {
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .background(ScreenBg)
+            .background(MaterialTheme.colorScheme.background)
     ) {
         HeaderBand(
             orderCount = orders.size,
@@ -489,30 +520,59 @@ fun DeliveryRouteApp(viewModel: DeliveryViewModel) {
                         selected = focusRider == 0,
                         onClick = { viewModel.setFocusRider(0) },
                         label = { Text("All") },
-                        colors = FilterChipDefaults.filterChipColors(containerColor = ComposeColor.White)
+                        colors = FilterChipDefaults.filterChipColors(containerColor = MaterialTheme.colorScheme.surface)
                     )
                     activePlans.forEach { p ->
                         FilterChip(
                             selected = focusRider == p.riderId,
                             onClick = { viewModel.setFocusRider(p.riderId) },
                             label = { Text("R${p.riderId}") },
-                            colors = FilterChipDefaults.filterChipColors(containerColor = ComposeColor.White)
+                            colors = FilterChipDefaults.filterChipColors(containerColor = MaterialTheme.colorScheme.surface)
                         )
                     }
                 }
+            }
+
+            SmallFloatingActionButton(
+                onClick = {
+                    val map = mapInstance ?: return@SmallFloatingActionButton
+                    val pts = mutableListOf(HUB.latLng)
+                    if (plans.isNotEmpty()) {
+                        pts.addAll(plans.flatMap { it.routePoints })
+                    } else if (orders.isNotEmpty()) {
+                        pts.addAll(orders.map { LatLng(it.latitude, it.longitude) })
+                    }
+                    if (pts.size > 1) {
+                        try {
+                            val b = LatLngBounds.Builder()
+                            pts.forEach { b.include(it) }
+                            map.animateCamera(CameraUpdateFactory.newLatLngBounds(b.build(), 120))
+                        } catch (_: Exception) {}
+                    } else {
+                        map.animateCamera(CameraUpdateFactory.newLatLngZoom(HUB.latLng, 13.0))
+                    }
+                },
+                containerColor = MaterialTheme.colorScheme.surface,
+                contentColor = MaterialTheme.colorScheme.onSurface,
+                shape = CircleShape,
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(top = 14.dp, end = 14.dp)
+            ) {
+                Text("🎯", fontSize = 18.sp)
             }
 
             if (isPlanning) {
                 Surface(
                     modifier = Modifier.align(Alignment.Center),
                     shape = RoundedCornerShape(16.dp),
-                    color = Navy.copy(alpha = 0.85f)
+                    color = NavyBackground.copy(alpha = 0.88f)
                 ) {
                     Row(
                         modifier = Modifier.padding(horizontal = 20.dp, vertical = 14.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        CircularProgressIndicator(color = Mint, modifier = Modifier.size(24.dp))
+                        CircularProgressIndicator(color = MintSecondary, modifier = Modifier.size(24.dp))
                         Spacer(Modifier.width(12.dp))
                         Text("Optimizing road routes...", color = ComposeColor.White, fontWeight = FontWeight.Bold)
                     }
@@ -522,6 +582,7 @@ fun DeliveryRouteApp(viewModel: DeliveryViewModel) {
             Column(
                 modifier = Modifier
                     .align(Alignment.BottomStart)
+                    .navigationBarsPadding()
                     .padding(start = 14.dp, bottom = 24.dp),
                 verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
@@ -556,6 +617,7 @@ fun DeliveryRouteApp(viewModel: DeliveryViewModel) {
             Column(
                 modifier = Modifier
                     .align(Alignment.BottomEnd)
+                    .navigationBarsPadding()
                     .padding(end = 14.dp, bottom = 24.dp),
                 verticalArrangement = Arrangement.spacedBy(10.dp),
                 horizontalAlignment = Alignment.End
@@ -589,7 +651,8 @@ fun DeliveryRouteApp(viewModel: DeliveryViewModel) {
         ModalBottomSheet(
             onDismissRequest = { activeSheet = ActiveSheet.NONE },
             sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = false),
-            containerColor = ComposeColor.White,
+            containerColor = MaterialTheme.colorScheme.surface,
+            dragHandle = { BottomSheetDefaults.DragHandle() },
             shape = RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp)
         ) {
             when (activeSheet) {
@@ -611,7 +674,16 @@ fun DeliveryRouteApp(viewModel: DeliveryViewModel) {
                             viewModel.add4Samples(barangays)
                             Toast.makeText(context, "Added 4 sample orders for Nasugbu!", Toast.LENGTH_SHORT).show()
                         },
-                        onClearOrders = { viewModel.clearPendingOrders() }
+                        onClearOrders = { viewModel.clearPendingOrders() },
+                        onOrderClick = { order ->
+                            activeSheet = ActiveSheet.NONE
+                            mapInstance?.animateCamera(
+                                CameraUpdateFactory.newLatLngZoom(
+                                    LatLng(order.latitude, order.longitude),
+                                    15.5
+                                )
+                            )
+                        }
                     )
                 }
                 ActiveSheet.SETUP -> {
@@ -645,7 +717,7 @@ fun DeliveryRouteApp(viewModel: DeliveryViewModel) {
                         simRunning = simRunning,
                         simSpeed = simSpeed,
                         onToggleSim = { viewModel.setSimRunning(!simRunning) },
-                        onSpeedChange = { viewModel.setSimSpeed(it) },
+                        onSpeedChange = { speed -> viewModel.setSimSpeed(speed) },
                         onDelivered = { id -> viewModel.markDelivered(HUB, id) }
                     )
                 }
@@ -667,7 +739,7 @@ fun HeaderBand(orderCount: Int, riderCount: Int) {
         modifier = Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(bottomStart = 24.dp, bottomEnd = 24.dp))
-            .background(Brush.linearGradient(listOf(Navy, Teal)))
+            .background(Brush.linearGradient(listOf(NavyBackground, TealPrimary)))
             .drawBehind {
                 drawCircle(
                     color = ComposeColor.White.copy(alpha = 0.07f),
@@ -681,7 +753,7 @@ fun HeaderBand(orderCount: Int, riderCount: Int) {
         Column {
             Text(
                 "CHRISVEN ROUTING",
-                color = Mint,
+                color = MintSecondary,
                 fontSize = 11.sp,
                 fontWeight = FontWeight.Bold,
                 letterSpacing = 2.sp
@@ -728,7 +800,7 @@ fun FloatingSquareButton(
     Surface(
         onClick = onClick,
         shape = RoundedCornerShape(16.dp),
-        color = if (isActive) Teal else ComposeColor.White,
+        color = if (isActive) TealPrimary else MaterialTheme.colorScheme.surface,
         shadowElevation = 6.dp,
         modifier = Modifier.size(62.dp)
     ) {
@@ -746,12 +818,12 @@ fun FloatingSquareButton(
                     label,
                     fontSize = 10.sp,
                     fontWeight = FontWeight.Bold,
-                    color = if (isActive) ComposeColor.White else Ink
+                    color = if (isActive) ComposeColor.White else MaterialTheme.colorScheme.onSurface
                 )
             }
             if (badgeCount > 0) {
                 Surface(
-                    color = if (isActive) Mint else UrgentRed,
+                    color = if (isActive) MintSecondary else UrgentRed,
                     shape = CircleShape,
                     modifier = Modifier
                         .align(Alignment.TopEnd)

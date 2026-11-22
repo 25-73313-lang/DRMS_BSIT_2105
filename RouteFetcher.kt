@@ -20,14 +20,13 @@ object RouteFetcher {
             val connection = (URL(urlString).openConnection() as HttpURLConnection).apply {
                 requestMethod = "GET"
                 setRequestProperty("User-Agent", "NasugbuDeliveryApp/1.0")
-                connectTimeout = 10000
-                readTimeout = 15000
+                connectTimeout = 8000
+                readTimeout = 12000
             }
             if (connection.responseCode == 200) {
                 connection.inputStream.bufferedReader().use { it.readText() }
             } else null
         } catch (e: Exception) {
-            e.printStackTrace()
             null
         }
     }
@@ -39,7 +38,7 @@ object RouteFetcher {
         val legMeters = ArrayList<Double>()
 
         for (i in 0 until waypoints.size - 1) {
-            if (i > 0) delay(150) // be gentle with the free OSRM server
+            if (i > 0) delay(120)
             val leg = fetchShortestLeg(waypoints[i], waypoints[i + 1]) ?: return null
             points.addAll(leg.points)
             legSeconds.add(leg.durationSeconds)
@@ -51,10 +50,16 @@ object RouteFetcher {
     private suspend fun fetchShortestLeg(a: LatLng, b: LatLng): RouteResult? = withContext(Dispatchers.IO) {
         val url = "$BASE_URL/route/v1/driving/${coordinates(listOf(a, b))}" +
                 "?overview=full&geometries=geojson&alternatives=true"
-        val body = httpGet(url) ?: return@withContext null
+        var body = httpGet(url)
+        if (body == null) {
+            delay(300)
+            body = httpGet(url)
+        }
+        if (body == null) return@withContext null
 
         try {
             val routes = JSONObject(body).getJSONArray("routes")
+            if (routes.length() == 0) return@withContext null
 
             var best: JSONObject? = null
             for (i in 0 until routes.length()) {
@@ -74,7 +79,6 @@ object RouteFetcher {
             val seconds = route.getDouble("duration")
             RouteResult(path, meters, seconds, listOf(seconds), listOf(meters))
         } catch (e: Exception) {
-            e.printStackTrace()
             null
         }
     }
@@ -86,10 +90,17 @@ object RouteFetcher {
         if (waypoints.size < 2) return@withContext null
         val url = "$BASE_URL/route/v1/driving/${coordinates(waypoints)}" +
                 "?overview=full&geometries=geojson"
-        val body = httpGet(url) ?: return@withContext null
+        var body = httpGet(url)
+        if (body == null) {
+            delay(300)
+            body = httpGet(url)
+        }
+        if (body == null) return@withContext null
 
         try {
-            val route = JSONObject(body).getJSONArray("routes").getJSONObject(0)
+            val routes = JSONObject(body).getJSONArray("routes")
+            if (routes.length() == 0) return@withContext null
+            val route = routes.getJSONObject(0)
 
             val coords = route.getJSONObject("geometry").getJSONArray("coordinates")
             val path = ArrayList<LatLng>(coords.length())
@@ -114,7 +125,6 @@ object RouteFetcher {
                 legDistancesMeters = legMeters
             )
         } catch (e: Exception) {
-            e.printStackTrace()
             null
         }
     }
@@ -122,7 +132,12 @@ object RouteFetcher {
     suspend fun fetchMatrix(points: List<LatLng>): CostMatrix? = withContext(Dispatchers.IO) {
         if (points.size < 2) return@withContext null
         val url = "$BASE_URL/table/v1/driving/${coordinates(points)}?annotations=duration,distance"
-        val body = httpGet(url) ?: return@withContext null
+        var body = httpGet(url)
+        if (body == null) {
+            delay(300)
+            body = httpGet(url)
+        }
+        if (body == null) return@withContext null
 
         try {
             val json = JSONObject(body)
@@ -141,7 +156,6 @@ object RouteFetcher {
             }
             CostMatrix(durations, distances)
         } catch (e: Exception) {
-            e.printStackTrace()
             null
         }
     }
